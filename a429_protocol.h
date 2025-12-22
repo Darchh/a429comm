@@ -43,49 +43,49 @@ struct A429Message {
 };
 #pragma pack(pop)
 
-// Configuration Bit Definitions
-enum class ChannelSpeed : uint32_t {
-    LOW_SPEED = 0,
-    HIGH_SPEED = 1
-};
+// Unified A429 Word Structure (Data, Config, Status)
+union A429Word {
+    uint32_t raw;
+    struct {
+        uint32_t label : 8;
+        uint32_t sdi : 2;
+        uint32_t data : 19;
+        uint32_t ssm : 2;
+        uint32_t parity : 1;
+    } a429;
+    struct {
+        uint32_t speed : 1; // 0: Low, 1: High
+        uint32_t reserved : 31;
+    } config;
+    struct {
+        uint32_t configured : 1;
+        uint32_t reserved : 31;
+    } status;
 
-// Status Bit Definitions
-constexpr uint32_t STATUS_ALIVE_MASK = 0x00000001;
-constexpr uint32_t STATUS_CONFIGURED_MASK = 0x00000001;
+    A429Word() : raw(0) {}
+    A429Word(uint32_t r) : raw(r) {}
+};
 
 class A429WordHelper {
 public:
     // TX / RX – A429 Data Word Construction
     static uint32_t pack(uint8_t label, uint8_t sdi, uint32_t data, uint8_t ssm, bool parity) {
-        uint32_t word = 0;
-        
-        // Label: Bits 8-0
-        word |= (static_cast<uint32_t>(label) & 0xFF); 
-        
-        // SDI: Bits 9-8
-        word |= (static_cast<uint32_t>(sdi) & 0x03) << 8;
-        
-        // Data: Bits 28-10 (19 bits)
-        word |= (data & 0x7FFFF) << 10;
-        
-        // SSM: Bits 30-29
-        word |= (static_cast<uint32_t>(ssm) & 0x03) << 29;
-        
-        // Parity: Bit 31
-        if (parity) {
-            word |= (1U << 31);
-        }
-        
-        return word;
+        A429Word word;
+        word.a429.label = label;
+        word.a429.sdi = sdi;
+        word.a429.data = data;
+        word.a429.ssm = ssm;
+        word.a429.parity = parity;
+        return word.raw;
     }
 
-    static void unpack(uint32_t word, uint8_t &label, uint8_t &sdi, uint32_t &data, uint8_t &ssm, bool &parity) {
-        label  = static_cast<uint8_t>(word & 0xFF);
-        
-        sdi    = static_cast<uint8_t>((word >> 8) & 0x03);
-        data   = (word >> 10) & 0x7FFFF;
-        ssm    = static_cast<uint8_t>((word >> 29) & 0x03);
-        parity = (word >> 31) & 0x01;
+    static void unpack(uint32_t raw_word, uint8_t &label, uint8_t &sdi, uint32_t &data, uint8_t &ssm, bool &parity) {
+        A429Word word(raw_word);
+        label  = word.a429.label;
+        sdi    = word.a429.sdi;
+        data   = word.a429.data;
+        ssm    = word.a429.ssm;
+        parity = word.a429.parity;
     }
 };
 

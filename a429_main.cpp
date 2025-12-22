@@ -1,36 +1,18 @@
 #include <iostream>
 #include <chrono>
-#include <vector>
 #include <thread>
-#include <functional>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <cstring>
 #include "a429_protocol.h"
-
-using namespace std::chrono;
-
 #include "a429_communicator.h"
+#include "a429_udp.h"
 
 int main() {
-    // UDP Socket Setup
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) {
-        perror("socket creation failed");
-        return -1;
-    }
-    struct sockaddr_in servaddr;
-    memset(&servaddr, 0, sizeof(servaddr));
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(8080); // Target Port
-    servaddr.sin_addr.s_addr = inet_addr("127.0.0.1"); // Target IP
+    // UDP Driver Setup (Local Port: 8080, Target: 192.168.1.55:8080)
+    A429UdpDriver udpDriver(8081, "127.0.0.1", 8080);
 
     // Initialize API with callbacks for hardware IO and Reporting
     A429Communicator comm(
-        [sock, &servaddr](const A429Message& msg) {
-            sendto(sock, &msg, sizeof(msg), 0, (const struct sockaddr *) &servaddr, sizeof(servaddr));
+        [&udpDriver](const A429Message& msg) {
+            udpDriver.send(msg);
             std::cout << "Sending Message Type: " << (int)msg.type << " Counter: " << msg.counter << std::endl;
         },
         []() {
@@ -41,10 +23,18 @@ int main() {
     std::cout << "A429 Communicator Started" << std::endl;
     
     while (true) {
+        // Check for incoming data
+        A429Message rxMsg;
+        std::string senderIp;
+        
+        if (udpDriver.receive(rxMsg, senderIp)) {
+            comm.onPacketReceived(rxMsg, std::chrono::steady_clock::now());
+            std::cout << "Received packet from " << senderIp << std::endl;
+        }
+
         comm.update();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    close(sock);
     return 0;
 }
