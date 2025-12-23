@@ -6,8 +6,14 @@ A429Communicator::A429Communicator(SendCallback sendCb, ReportCallback reportCb)
 }
 
 void A429Communicator::resetConfigurationStatus() {
-    for(bool &b : txConfigured) b = false;
-    for(bool &b : rxConfigured) b = false;
+    for(auto &ch : txChannels) {
+        ch.state = ChannelState::IDLE;
+        ch.configured = false;
+    }
+    for(auto &ch : rxChannels) {
+        ch.state = ChannelState::IDLE;
+        ch.configured = false;
+    }
 }
 
 void A429Communicator::update(std::chrono::steady_clock::time_point now) {
@@ -18,32 +24,21 @@ void A429Communicator::update(std::chrono::steady_clock::time_point now) {
         rxBuffer.pop_front();
     }
 
+    // Update each channel's state
+    updateChannelStates(now);
+
     switch (currentState) {
         case CommState::STARTUP:
             sendConfiguration();
             currentState = CommState::CONFIGURING;
-            lastConfigSent = now;
             break;
 
         case CommState::CONFIGURING:
-            // Timeout Rule: If no response within 4 seconds, retransmit
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - lastConfigSent).count() >= 4) {
-                std::cerr << "[Error] Configuration Timeout. Retrying..." << std::endl;
-                sendConfiguration(); // Resend for unconfigured channels
-                lastConfigSent = now;
-            }
+            checkConfigurationComplete(now);
             break;
 
         case CommState::OPERATIONAL:
-            // Operational Rule: Expect CONFIG STATUS every 1s. 
-            // Timeout Rule: If not received for 4s, return to configuration
-            if (std::chrono::duration_cast<std::chrono::seconds>(now - lastConfigStatusReceived).count() >= 4) {
-                std::cerr << "[Error] Connection Lost (No CONFIG STATUS). Reverting to Configuration." << std::endl;
-                currentState = CommState::ERROR_RECOVERY;
-            }
-            
             // Operational Rule: TX/RX STATUS transmitted every 5s to OMD
-            // (Assuming OMD reporting is internal to simulator logic)
             if (std::chrono::duration_cast<std::chrono::seconds>(now - lastOmdReport).count() >= 5) {
                 if (reportCallback) reportCallback();
                 lastOmdReport = now;
@@ -64,21 +59,25 @@ void A429Communicator::onPacketReceived(const A429Message& msg, std::chrono::ste
 
 void A429Communicator::processPacket(const A429Message& msg, std::chrono::steady_clock::time_point now) {
     if (msg.type == MsgType::TX_CFG_STATUS) {
-        lastConfigStatusReceived = now;
         for (int i = 0; i < MAX_TX_CHANNELS; ++i) {
             A429Word status(msg.data[i]);
             if (status.status.configured) {
-                txConfigured[i] = true;
+                txChannels[i].configured = true;
+                txChannels[i].state = ChannelState::OPERATIONAL;
+                txChannels[i].lastStatusReceived = now;
+                std::cout << "TX Channel " << i << " configured and operational." << std::endl;
             }
         }
         checkConfigurationComplete(now);
     }
     else if (msg.type == MsgType::RX_CFG_STATUS) {
-        lastConfigStatusReceived = now;
         for (int i = 0; i < MAX_RX_CHANNELS; ++i) {
             A429Word status(msg.data[i]);
             if (status.status.configured) {
-                rxConfigured[i] = true;
+                rxChannels[i].configured = true;
+                rxChannels[i].state = ChannelState::OPERATIONAL;
+                rxChannels[i].lastStatusReceived = now;
+                std::cout << "RX Channel " << i << " configured and operational." << std::endl;
             }
         }
         checkConfigurationComplete(now);
@@ -96,20 +95,23 @@ void A429Communicator::checkConfigurationComplete(std::chrono::steady_clock::tim
     if (currentState != CommState::CONFIGURING) return;
 
     bool anyConfigured = false;
-    for (bool b : txConfigured) if (b) anyConfigured = true;
-    for (bool b : rxConfigured) if (b) anyConfigured = true;
+    for (const auto& ch : txChannels) {
+        if (ch.configured) anyConfigured = true;
+    }
+    for (const auto& ch : rxChannels) {
+        if (ch.configured) anyConfigured = true;
+    }
 
     if (anyConfigured) {
         std::cout << "At least one channel configured. Entering OPERATIONAL state." << std::endl;
         currentState = CommState::OPERATIONAL;
-        // Reset timers to prevent immediate timeout
-        lastConfigStatusReceived = now;
         lastOmdReport = now;
     }
 }
 
 void A429Communicator::sendConfiguration() {
     std::cout << "Sending Configuration Message..." << std::endl;
+    auto now = std::chrono::steady_clock::now();
 
     // Send TX Configuration
     A429Message txMsg;
@@ -118,8 +120,10 @@ void A429Communicator::sendConfiguration() {
     A429Word txCfg;
     txCfg.config.speed = 1; // High Speed
     for (int i = 0; i < MAX_TX_CHANNELS; ++i) {
-        if (!txConfigured[i]) {
+        if (!txChannels[i].configured) {
             txMsg.data[i] = txCfg.raw;
+            txChannels[i].state = ChannelState::CONFIGURING;
+            txChannels[i].lastConfigSent = now;
             sendTx = true;
         }
     }
@@ -132,8 +136,10 @@ void A429Communicator::sendConfiguration() {
     A429Word rxCfg;
     rxCfg.config.speed = 0; // Low Speed
     for (int i = 0; i < MAX_RX_CHANNELS; ++i) {
-        if (!rxConfigured[i]) {
+        if (!rxChannels[i].configured) {
             rxMsg.data[i] = rxCfg.raw;
+            rxChannels[i].state = ChannelState::CONFIGURING;
+            rxChannels[i].lastConfigSent = now;
             sendRx = true;
         }
     }
@@ -143,4 +149,98 @@ void A429Communicator::sendConfiguration() {
 void A429Communicator::sendToHardware(A429Message& msg) {
     msg.counter = txCounter++;
     if (sendCallback) sendCallback(msg);
+}
+
+void A429Communicator::updateChannelStates(std::chrono::steady_clock::time_point now) {
+    // Check TX channels
+    for (int i = 0; i < MAX_TX_CHANNELS; ++i) {
+        auto& ch = txChannels[i];
+        
+        if (ch.state == ChannelState::CONFIGURING) {
+            // 4 second timeout - resend if no config response received
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - ch.lastConfigSent).count() >= 4) {
+                std::cerr << "[Error] TX Channel " << i << " Configuration Timeout. Retrying..." << std::endl;
+                sendChannelConfiguration(i, true);
+                ch.lastConfigSent = now;
+            }
+        }
+        else if (ch.state == ChannelState::OPERATIONAL) {
+            // Connection lost if no status received for 4 seconds
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - ch.lastStatusReceived).count() >= 4) {
+                std::cerr << "[Error] TX Channel " << i << " Connection Lost. Reverting to reconfiguration." << std::endl;
+                ch.state = ChannelState::ERROR_RECOVERY;
+                ch.configured = false;
+            }
+        }
+        else if (ch.state == ChannelState::ERROR_RECOVERY) {
+            // Reconfigure the channel
+            ch.state = ChannelState::IDLE;
+            sendChannelConfiguration(i, true);
+        }
+    }
+    
+    // Check RX channels
+    for (int i = 0; i < MAX_RX_CHANNELS; ++i) {
+        auto& ch = rxChannels[i];
+        
+        if (ch.state == ChannelState::CONFIGURING) {
+            // 4 second timeout - resend if no config response received
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - ch.lastConfigSent).count() >= 4) {
+                std::cerr << "[Error] RX Channel " << i << " Configuration Timeout. Retrying..." << std::endl;
+                sendChannelConfiguration(i, false);
+                ch.lastConfigSent = now;
+            }
+        }
+        else if (ch.state == ChannelState::OPERATIONAL) {
+            // Connection lost if no status received for 4 seconds
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - ch.lastStatusReceived).count() >= 4) {
+                std::cerr << "[Error] RX Channel " << i << " Connection Lost. Reverting to reconfiguration." << std::endl;
+                ch.state = ChannelState::ERROR_RECOVERY;
+                ch.configured = false;
+            }
+        }
+        else if (ch.state == ChannelState::ERROR_RECOVERY) {
+            // Reconfigure the channel
+            ch.state = ChannelState::IDLE;
+            sendChannelConfiguration(i, false);
+        }
+    }
+}
+
+void A429Communicator::sendChannelConfiguration(int channelIndex, bool isTx) {
+    auto now = std::chrono::steady_clock::now();
+    
+    if (isTx) {
+        A429Message txMsg;
+        txMsg.type = MsgType::TX_CFG;
+        A429Word txCfg;
+        txCfg.config.speed = 1; // High Speed
+        
+        for (int i = 0; i < MAX_TX_CHANNELS; ++i) {
+            txMsg.data[i] = DEFAULT_UNUSED_FIELD;
+        }
+        
+        txMsg.data[channelIndex] = txCfg.raw;
+        txChannels[channelIndex].state = ChannelState::CONFIGURING;
+        txChannels[channelIndex].lastConfigSent = now;
+        
+        std::cout << "Sending TX Channel " << channelIndex << " configuration..." << std::endl;
+        sendToHardware(txMsg);
+    } else {
+        A429Message rxMsg;
+        rxMsg.type = MsgType::RX_CFG;
+        A429Word rxCfg;
+        rxCfg.config.speed = 0; // Low Speed
+        
+        for (int i = 0; i < MAX_RX_CHANNELS; ++i) {
+            rxMsg.data[i] = DEFAULT_UNUSED_FIELD;
+        }
+        
+        rxMsg.data[channelIndex] = rxCfg.raw;
+        rxChannels[channelIndex].state = ChannelState::CONFIGURING;
+        rxChannels[channelIndex].lastConfigSent = now;
+        
+        std::cout << "Sending RX Channel " << channelIndex << " configuration..." << std::endl;
+        sendToHardware(rxMsg);
+    }
 }

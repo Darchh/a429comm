@@ -8,11 +8,27 @@
 #include "a429_export.h"
 #include "a429_protocol.h"
 
+enum class ChannelState {
+    IDLE,           // Channel not yet configured
+    CONFIGURING,    // Configuration sent, waiting for response
+    OPERATIONAL,    // Channel configured and operational
+    ERROR_RECOVERY  // Connection lost, reconfiguration needed
+};
+
 enum class CommState {
     STARTUP,
     CONFIGURING,
     OPERATIONAL,
     ERROR_RECOVERY
+};
+
+struct ChannelInfo {
+    ChannelState state;
+    std::chrono::steady_clock::time_point lastConfigSent;
+    std::chrono::steady_clock::time_point lastStatusReceived;
+    bool configured;
+    
+    ChannelInfo() : state(ChannelState::IDLE), configured(false) {}
 };
 
 class A429_API A429Communicator {
@@ -22,15 +38,15 @@ public:
 
 private:
     CommState currentState;
-    std::chrono::steady_clock::time_point lastConfigStatusReceived;
-    std::chrono::steady_clock::time_point lastConfigSent;
     std::chrono::steady_clock::time_point lastOmdReport;
     
     uint32_t txCounter = 0;
     uint32_t rxCounter = 0;
     std::deque<A429Message> rxBuffer;
-    bool txConfigured[MAX_TX_CHANNELS];
-    bool rxConfigured[MAX_RX_CHANNELS];
+    
+    // Her kanal için ayrı state bilgisi
+    ChannelInfo txChannels[MAX_TX_CHANNELS];
+    ChannelInfo rxChannels[MAX_RX_CHANNELS];
 
     SendCallback sendCallback;
     ReportCallback reportCallback;
@@ -45,17 +61,22 @@ public:
     // Simulates receiving a UDP packet
     void onPacketReceived(const A429Message& msg, std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 
-    // Getter for testing purposes
+    // Getters for testing purposes
     CommState getCurrentState() const;
+    const ChannelInfo& getTxChannelInfo(int index) const { return txChannels[index]; }
+    const ChannelInfo& getRxChannelInfo(int index) const { return rxChannels[index]; }
 
 private:
     void checkConfigurationComplete(std::chrono::steady_clock::time_point now);
 
     void sendConfiguration();
+    void sendChannelConfiguration(int channelIndex, bool isTx);
 
     void sendToHardware(A429Message& msg);
 
     void processPacket(const A429Message& msg, std::chrono::steady_clock::time_point now);
+    
+    void updateChannelStates(std::chrono::steady_clock::time_point now);
 };
 
 #endif

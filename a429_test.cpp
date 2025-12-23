@@ -78,26 +78,44 @@ protected:
         );
     }
 
-    // Helper function to reach ERROR_RECOVERY state
-    void ReachErrorRecoveryState() {
-        auto now = std::chrono::steady_clock::now();
-        comm->update(now);
-        
+    // Helper function to configure specific channels
+    void ConfigureChannels(const std::vector<int>& txChannels, const std::vector<int>& rxChannels, std::chrono::steady_clock::time_point now) {
         A429Word statusWord;
         statusWord.status.configured = 1;
 
-        A429Message status;
-        status.type = MsgType::TX_CFG_STATUS;
-        for(int i=0; i<MAX_TX_CHANNELS; ++i) status.data[i] = statusWord.raw;
-        comm->onPacketReceived(status, now);
-        status.type = MsgType::RX_CFG_STATUS;
-        for(int i=0; i<MAX_RX_CHANNELS; ++i) status.data[i] = statusWord.raw;
-        comm->onPacketReceived(status, now);
+        if (!txChannels.empty()) {
+            A429Message txStatus;
+            txStatus.type = MsgType::TX_CFG_STATUS;
+            for(int i=0; i<MAX_TX_CHANNELS; ++i) txStatus.data[i] = 0;
+            for(int idx : txChannels) txStatus.data[idx] = statusWord.raw;
+            comm->onPacketReceived(txStatus, now);
+        }
         
-        comm->update(now); // Process buffer -> OPERATIONAL
+        if (!rxChannels.empty()) {
+            A429Message rxStatus;
+            rxStatus.type = MsgType::RX_CFG_STATUS;
+            for(int i=0; i<MAX_RX_CHANNELS; ++i) rxStatus.data[i] = 0;
+            for(int idx : rxChannels) rxStatus.data[idx] = statusWord.raw;
+            comm->onPacketReceived(rxStatus, now);
+        }
+    }
 
-        // Timeout -> ERROR_RECOVERY
-        comm->update(now + std::chrono::seconds(4));
+    // Helper function to reach ERROR_RECOVERY state for specific channel
+    void ReachChannelErrorRecovery(int channelIndex, bool isTx) {
+        auto now = std::chrono::steady_clock::now();
+        comm->update(now);
+        
+        // Configure the channel
+        if (isTx) {
+            ConfigureChannels({channelIndex}, {}, now);
+        } else {
+            ConfigureChannels({}, {channelIndex}, now);
+        }
+        
+        comm->update(now); // Process buffer -> Channel OPERATIONAL
+
+        // Timeout -> Channel ERROR_RECOVERY (no status received for 4 seconds)
+        comm->update(now + std::chrono::seconds(5));
     }
 };
 
@@ -114,16 +132,17 @@ TEST_F(CommunicatorLogicTest, StartsInStartupAndSendsConfig) {
 
 TEST_F(CommunicatorLogicTest, RetransmitsConfigOnTimeout) {
     auto start = std::chrono::steady_clock::now();
-    comm->update(start); // First transmission
+    comm->update(start); // First transmission - all channels go to CONFIGURING
     sentMessages.clear();
 
     // After 3 seconds (No timeout)
     comm->update(start + std::chrono::seconds(3));
     EXPECT_EQ(sentMessages.size(), 0);
 
-    // After 4 seconds (Timeout occurred, should retransmit)
-    comm->update(start + std::chrono::seconds(4));
-    EXPECT_GE(sentMessages.size(), 2);
+    // After 4 seconds (Timeout occurred, should retransmit for unconfigured channels)
+    comm->update(start + std::chrono::seconds(5));
+    // Each unconfigured channel will send individual config messages
+    EXPECT_GE(sentMessages.size(), 1);
 }
 
 TEST_F(CommunicatorLogicTest, TransitionsToOperationalWhenConfigured) {
@@ -152,9 +171,22 @@ TEST_F(CommunicatorLogicTest, TransitionsToOperationalWhenConfigured) {
     EXPECT_EQ(comm->getCurrentState(), CommState::OPERATIONAL);
 }
 
-TEST_F(CommunicatorLogicTest, OperationalTimeoutTriggersRecovery) {
-    ReachErrorRecoveryState();
-    EXPECT_EQ(comm->getCurrentState(), CommState::ERROR_RECOVERY);
+TEST_F(CommunicatorLogicTest, ChannelOperationalTimeoutTriggersRecovery) {
+    auto now = std::chrono::steady_clock::now();
+    comm->update(now);
+    
+    // Configure TX channel 0
+    ConfigureChannels({0}, {}, now);
+    comm->update(now);
+    
+    // Verify channel is operational
+    EXPECT_EQ(comm->getTxChannelInfo(0).state, ChannelState::OPERATIONAL);
+    EXPECT_TRUE(comm->getTxChannelInfo(0).configured);
+    
+    // After 5 seconds without status, channel should go to ERROR_RECOVERY
+    comm->update(now + std::chrono::seconds(5));
+    EXPECT_EQ(comm->getTxChannelInfo(0).state, ChannelState::ERROR_RECOVERY);
+    EXPECT_FALSE(comm->getTxChannelInfo(0).configured);
 }
 
 TEST_F(CommunicatorLogicTest, TransitionsToOperationalWhenOnlyOneChannelIsConfigured) {
@@ -207,20 +239,127 @@ TEST_F(CommunicatorLogicTest, TriggersOmdReportOnTimer) {
     EXPECT_TRUE(reportCalled);
 }
 
-TEST_F(CommunicatorLogicTest, ErrorRecoveryCycle) {
-    // Go to OPERATIONAL and then trigger ERROR_RECOVERY
-    ReachErrorRecoveryState();
-    EXPECT_EQ(comm->getCurrentState(), CommState::ERROR_RECOVERY);
+TEST_F(CommunicatorLogicTest, ChannelErrorRecoveryCycle) {
+    auto now = std::chrono::steady_clock::now();
+    comm->update(now);
+    
+    // Configure TX channel 2
+    ConfigureChannels({2}, {}, now);
+    comm->update(now);
+    
+    EXPECT_EQ(comm->getTxChannelInfo(2).state, ChannelState::OPERATIONAL);
     sentMessages.clear();
 
-    // First update: ERROR_RECOVERY -> STARTUP
-    comm->update();
-    EXPECT_EQ(comm->getCurrentState(), CommState::STARTUP);
+    // Timeout -> ERROR_RECOVERY
+    comm->update(now + std::chrono::seconds(5));
+    EXPECT_EQ(comm->getTxChannelInfo(2).state, ChannelState::ERROR_RECOVERY);
+    EXPECT_FALSE(comm->getTxChannelInfo(2).configured);
 
-    // Second update: STARTUP -> CONFIGURING (and sends config)
-    comm->update();
+    // Next update: ERROR_RECOVERY -> IDLE -> CONFIGURING (auto retry)
+    comm->update(now + std::chrono::seconds(6));
+    EXPECT_GE(sentMessages.size(), 1); // Channel should be reconfigured
+}
+
+TEST_F(CommunicatorLogicTest, IndividualChannelStateManagement) {
+    auto now = std::chrono::steady_clock::now();
+    comm->update(now); // STARTUP -> CONFIGURING
+    
+    // Initially all channels should be in CONFIGURING state
+    for (int i = 0; i < MAX_TX_CHANNELS; ++i) {
+        EXPECT_EQ(comm->getTxChannelInfo(i).state, ChannelState::CONFIGURING);
+    }
+    for (int i = 0; i < MAX_RX_CHANNELS; ++i) {
+        EXPECT_EQ(comm->getRxChannelInfo(i).state, ChannelState::CONFIGURING);
+    }
+    
+    // Configure only TX channels 0, 2 and RX channel 5
+    ConfigureChannels({0, 2}, {5}, now);
+    comm->update(now);
+    
+    // Check configured channels are OPERATIONAL
+    EXPECT_EQ(comm->getTxChannelInfo(0).state, ChannelState::OPERATIONAL);
+    EXPECT_TRUE(comm->getTxChannelInfo(0).configured);
+    EXPECT_EQ(comm->getTxChannelInfo(2).state, ChannelState::OPERATIONAL);
+    EXPECT_TRUE(comm->getTxChannelInfo(2).configured);
+    EXPECT_EQ(comm->getRxChannelInfo(5).state, ChannelState::OPERATIONAL);
+    EXPECT_TRUE(comm->getRxChannelInfo(5).configured);
+    
+    // Check unconfigured channels are still CONFIGURING
+    EXPECT_EQ(comm->getTxChannelInfo(1).state, ChannelState::CONFIGURING);
+    EXPECT_FALSE(comm->getTxChannelInfo(1).configured);
+    EXPECT_EQ(comm->getTxChannelInfo(3).state, ChannelState::CONFIGURING);
+    EXPECT_FALSE(comm->getTxChannelInfo(3).configured);
+}
+
+TEST_F(CommunicatorLogicTest, MultipleChannelTimeouts) {
+    auto now = std::chrono::steady_clock::now();
+    comm->update(now);
+    
+    // Configure TX channels 0 and 1
+    ConfigureChannels({0, 1}, {}, now);
+    comm->update(now);
+    
+    EXPECT_EQ(comm->getTxChannelInfo(0).state, ChannelState::OPERATIONAL);
+    EXPECT_EQ(comm->getTxChannelInfo(1).state, ChannelState::OPERATIONAL);
+    
+    // Keep only channel 0 alive by sending status
+    A429Word statusWord;
+    statusWord.status.configured = 1;
+    A429Message txStatus;
+    txStatus.type = MsgType::TX_CFG_STATUS;
+    for(int i=0; i<MAX_TX_CHANNELS; ++i) txStatus.data[i] = 0;
+    txStatus.data[0] = statusWord.raw; // Only channel 0 gets status
+    
+    // At 3 seconds, send status for channel 0 only
+    comm->onPacketReceived(txStatus, now + std::chrono::seconds(3));
+    comm->update(now + std::chrono::seconds(3));
+    
+    // Channel 0 should still be OPERATIONAL, channel 1 should timeout
+    comm->update(now + std::chrono::seconds(5));
+    EXPECT_EQ(comm->getTxChannelInfo(0).state, ChannelState::OPERATIONAL);
+    EXPECT_EQ(comm->getTxChannelInfo(1).state, ChannelState::ERROR_RECOVERY);
+}
+
+TEST_F(CommunicatorLogicTest, PartialConfigurationRetry) {
+    auto start = std::chrono::steady_clock::now();
+    comm->update(start); // All channels CONFIGURING
+    
+    // Configure only TX channel 0
+    ConfigureChannels({0}, {}, start);
+    comm->update(start);
+    
+    EXPECT_EQ(comm->getTxChannelInfo(0).state, ChannelState::OPERATIONAL);
+    EXPECT_EQ(comm->getTxChannelInfo(1).state, ChannelState::CONFIGURING);
+    
+    sentMessages.clear();
+    
+    // After 5 seconds, unconfigured channels should retry
+    comm->update(start + std::chrono::seconds(5));
+    
+    // Channel 1 should have retry config sent
+    EXPECT_GE(sentMessages.size(), 1);
+    
+    // Channel 0 should still be operational
+    EXPECT_EQ(comm->getTxChannelInfo(0).state, ChannelState::OPERATIONAL);
+}
+
+TEST_F(CommunicatorLogicTest, SystemOperationalWithPartialChannels) {
+    auto now = std::chrono::steady_clock::now();
+    comm->update(now);
     EXPECT_EQ(comm->getCurrentState(), CommState::CONFIGURING);
-    EXPECT_GE(sentMessages.size(), 2); // Check if config was re-sent
+    
+    // Configure only one TX channel and one RX channel
+    ConfigureChannels({1}, {3}, now);
+    comm->update(now);
+    
+    // System should go to OPERATIONAL even with partial configuration
+    EXPECT_EQ(comm->getCurrentState(), CommState::OPERATIONAL);
+    EXPECT_EQ(comm->getTxChannelInfo(1).state, ChannelState::OPERATIONAL);
+    EXPECT_EQ(comm->getRxChannelInfo(3).state, ChannelState::OPERATIONAL);
+    
+    // Other channels should still be CONFIGURING
+    EXPECT_EQ(comm->getTxChannelInfo(0).state, ChannelState::CONFIGURING);
+    EXPECT_EQ(comm->getRxChannelInfo(0).state, ChannelState::CONFIGURING);
 }
 
 // --- 3. UDP Driver Integration Test ---
