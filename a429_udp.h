@@ -2,7 +2,12 @@
 #define A429_UDP_H
 
 #include <string>
-#include <netinet/in.h>
+#ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+#else
+    #include <netinet/in.h>
+#endif
 #include "a429_export.h"
 #include "a429_protocol.h"
 

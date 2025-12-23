@@ -1,7 +1,7 @@
 #ifndef A429_EXPORT_H
 #define A429_EXPORT_H
 
-#if defined(_WIN32) || defined(__CYGWIN__)
+#if defined(_WIN32)
   #ifdef A429_BUILD_DLL
     #ifdef __GNUC__
       #define A429_API __attribute__ ((dllexport))
@@ -19,4 +19,4 @@
   #endif
 #endif
 
-#endif // A429_EXPORT_H
+#endif  // A429_EXPORT_H

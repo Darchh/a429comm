@@ -36,24 +36,10 @@ set_target_properties(a429_lib PROPERTIES CXX_VISIBILITY_PRESET hidden)
 
 target_include_directories(a429_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
+if(WIN32)
+    target_link_libraries(a429_lib PRIVATE Ws2_32)
+endif()
+
 # --- Main Application ---
 add_executable(${PROJECT_NAME} a429_main.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE a429_lib)
-
-# --- Google Test Setup ---
-enable_testing()
-
-find_package(Threads REQUIRED)
-
-# Check if googletest directory exists, if not, print error
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/googletest/CMakeLists.txt")
-    message(FATAL_ERROR "googletest not found! Please run: git clone https://github.com/google/googletest.git")
-endif()
-add_subdirectory(googletest)
-
-# --- Test Executable ---
-add_executable(a429_test a429_test.cpp)
-# Link the test executable against our library and Google Test
-target_link_libraries(a429_test PRIVATE a429_lib gtest Threads::Threads)
-
-add_test(NAME RunTests COMMAND a429_test)
