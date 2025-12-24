@@ -2,27 +2,21 @@
 #include <vector>
 #include <iostream>
 
-// TX Handler: manages outgoing messages
-class A429TxHandler {
-public:
-    void handleTx(const A429Message& msg) {
-        // You can process, log, or queue TX messages here
-        std::cout << "[TX Handler] TX Message: Type=" << (int)msg.type << " Counter=" << msg.counter << std::endl;
-    }
-};
+void A429TxHandler::handleTx(const A429Message& msg) {
+    // Buffer the message inside the class
+    txQueue.push_back(msg);
 
-// RX Handler: manages incoming messages
-class A429RxHandler {
-public:
-    void handleRx(const A429Message& msg) {
-        // You can process, log, or handle RX messages here
-        std::cout << "[RX Handler] RX Message: Type=" << (int)msg.type << " Counter=" << msg.counter << std::endl;
-    }
-};
+    // You can process, log, or queue TX messages here
+    std::cout << "[TX Handler] TX Message Buffered. Type=" << (int)msg.type << " Counter=" << msg.counter << std::endl;
+}
 
-// Handler objects inside Communicator
-static A429TxHandler txHandler;
-static A429RxHandler rxHandler;
+void A429RxHandler::handleRx(const A429Message& msg) {
+    // Buffer the message inside the class
+    rxQueue.push_back(msg);
+
+    // You can process, log, or handle RX messages here
+    std::cout << "[RX Handler] RX Message Buffered. Type=" << (int)msg.type << " Counter=" << msg.counter << std::endl;
+}
 
 // Enable or disable TX channel
 void A429Communicator::enableTxChannel(int channelIndex, bool enable) {
@@ -103,7 +97,7 @@ void A429Communicator::update(std::chrono::steady_clock::time_point now) {
 
     switch (currentState) {
         case CommState::STARTUP:
-            sendConfiguration();
+            sendConfiguration(now);
             currentState = CommState::CONFIGURING;
             break;
 
@@ -127,7 +121,7 @@ void A429Communicator::update(std::chrono::steady_clock::time_point now) {
     }
 }
 
-void A429Communicator::onPacketReceived(const A429Message& msg, std::chrono::steady_clock::time_point /*now*/) {
+void A429Communicator::onPacketReceived(const A429Message& msg, std::chrono::steady_clock::time_point) {
     rxBuffer.push_back(msg);
 }
 
@@ -191,9 +185,8 @@ void A429Communicator::checkConfigurationComplete(std::chrono::steady_clock::tim
     }
 }
 
-void A429Communicator::sendConfiguration() {
+void A429Communicator::sendConfiguration(std::chrono::steady_clock::time_point now) {
     std::cout << "Sending Configuration Message..." << std::endl;
-    auto now = std::chrono::steady_clock::now();
 
     // Send TX Configuration
     A429Message txMsg;
@@ -230,6 +223,15 @@ void A429Communicator::sendConfiguration() {
 
 void A429Communicator::sendToHardware(A429Message& msg) {
     msg.counter = txCounter++;
+    
+    // Pass to handler (buffer/log)
+    txHandler.handleTx(msg);
+
+    // Send via UDP directly from here
+    if (udpDriver) {
+        udpDriver->send(msg);
+    }
+
     if (sendCallback) sendCallback(msg);
 }
 
@@ -242,7 +244,7 @@ void A429Communicator::updateChannelStates(std::chrono::steady_clock::time_point
             // 4 second timeout - resend if no config response received
             if (std::chrono::duration_cast<std::chrono::seconds>(now - ch.lastConfigSent).count() >= 4) {
                 std::cerr << "[Error] TX Channel " << i << " Configuration Timeout. Retrying..." << std::endl;
-                sendChannelConfiguration(i, true);
+                sendChannelConfiguration(i, true, now);
                 ch.lastConfigSent = now;
             }
         }
@@ -257,7 +259,7 @@ void A429Communicator::updateChannelStates(std::chrono::steady_clock::time_point
         else if (ch.state == ChannelState::ERROR_RECOVERY) {
             // Reconfigure the channel
             ch.state = ChannelState::IDLE;
-            sendChannelConfiguration(i, true);
+            sendChannelConfiguration(i, true, now);
         }
     }
     
@@ -269,7 +271,7 @@ void A429Communicator::updateChannelStates(std::chrono::steady_clock::time_point
             // 4 second timeout - resend if no config response received
             if (std::chrono::duration_cast<std::chrono::seconds>(now - ch.lastConfigSent).count() >= 4) {
                 std::cerr << "[Error] RX Channel " << i << " Configuration Timeout. Retrying..." << std::endl;
-                sendChannelConfiguration(i, false);
+                sendChannelConfiguration(i, false, now);
                 ch.lastConfigSent = now;
             }
         }
@@ -284,13 +286,12 @@ void A429Communicator::updateChannelStates(std::chrono::steady_clock::time_point
         else if (ch.state == ChannelState::ERROR_RECOVERY) {
             // Reconfigure the channel
             ch.state = ChannelState::IDLE;
-            sendChannelConfiguration(i, false);
+            sendChannelConfiguration(i, false, now);
         }
     }
 }
 
-void A429Communicator::sendChannelConfiguration(int channelIndex, bool isTx) {
-    auto now = std::chrono::steady_clock::now();
+void A429Communicator::sendChannelConfiguration(int channelIndex, bool isTx, std::chrono::steady_clock::time_point now) {
     
     if (isTx) {
         A429Message txMsg;

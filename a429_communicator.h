@@ -5,6 +5,7 @@
 #include <chrono>
 #include <functional>
 #include <deque>
+#include <vector>
 #include "a429_export.h"
 #include "a429_protocol.h"
 
@@ -31,6 +32,20 @@ struct ChannelInfo {
     ChannelInfo() : state(ChannelState::IDLE), configured(false) {}
 };
 
+// TX Handler: manages outgoing messages
+class A429TxHandler {
+    std::vector<A429Message> txQueue;
+public:
+    void handleTx(const A429Message& msg);
+};
+
+// RX Handler: manages incoming messages
+class A429RxHandler {
+    std::vector<A429Message> rxQueue;
+public:
+    void handleRx(const A429Message& msg);
+};
+
 class A429_API A429Communicator {
 public:
     using SendCallback = std::function<void(const A429Message&)>;
@@ -53,6 +68,10 @@ private:
     ReceiveCallback receiveCallback;
     ReportCallback reportCallback;
 
+    // Handlers
+    A429TxHandler txHandler;
+    A429RxHandler rxHandler;
+
     // UDP driver as member
     A429UdpDriver* udpDriver = nullptr;
 
@@ -61,8 +80,8 @@ public:
 
     void resetConfigurationStatus();
 
-    // If no time is given, steady_clock::now() is used
-    void update(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+    // Update with external time provided by the caller/simulator
+    void update(std::chrono::steady_clock::time_point now);
 
     // Send TX message via API
     // Send message from one or more TX channels
@@ -74,8 +93,8 @@ public:
 private:
     void checkConfigurationComplete(std::chrono::steady_clock::time_point now);
 
-    void sendConfiguration();
-    void sendChannelConfiguration(int channelIndex, bool isTx);
+    void sendConfiguration(std::chrono::steady_clock::time_point now);
+    void sendChannelConfiguration(int channelIndex, bool isTx, std::chrono::steady_clock::time_point now);
 
     void sendToHardware(A429Message& msg);
 
