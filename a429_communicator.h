@@ -32,20 +32,6 @@ struct ChannelInfo {
     ChannelInfo() : state(ChannelState::IDLE), configured(false) {}
 };
 
-// TX Handler: manages outgoing messages
-class A429TxHandler {
-    std::vector<A429Message> txQueue;
-public:
-    void handleTx(const A429Message& msg);
-};
-
-// RX Handler: manages incoming messages
-class A429RxHandler {
-    std::vector<A429Message> rxQueue;
-public:
-    void handleRx(const A429Message& msg);
-};
-
 class A429_API A429Communicator {
 public:
     using SendCallback = std::function<void(const A429Message&)>;
@@ -68,9 +54,9 @@ private:
     ReceiveCallback receiveCallback;
     ReportCallback reportCallback;
 
-    // Handlers
-    A429TxHandler txHandler;
-    A429RxHandler rxHandler;
+    // Message Queues
+    std::vector<A429Message> txQueue;
+    std::vector<A429Message> rxQueue;
 
     // UDP driver as member
     A429UdpDriver* udpDriver = nullptr;
@@ -103,6 +89,10 @@ private:
     void updateChannelStates(std::chrono::steady_clock::time_point now);
 
     void defaultReceiveCallback(const A429Message& msg);
+
+    // Internal helpers to buffer messages
+    void bufferTx(const A429Message& msg);
+    void bufferRx(const A429Message& msg);
 };
 
 #endif
