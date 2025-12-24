@@ -101,6 +101,8 @@ private:
     void processPacket(const A429Message& msg, std::chrono::steady_clock::time_point now);
     
     void updateChannelStates(std::chrono::steady_clock::time_point now);
+
+    void defaultReceiveCallback(const A429Message& msg);
 };
 
 #endif

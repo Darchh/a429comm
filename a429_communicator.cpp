@@ -88,7 +88,11 @@ void A429Communicator::update(std::chrono::steady_clock::time_point now) {
     // Consume RX messages accumulated in the buffer
     if (!rxHandler.rxQueue.empty()) {
         for (const auto& msg : rxHandler.rxQueue) {
-            if (receiveCallback) receiveCallback(msg);
+            if (receiveCallback) {
+                receiveCallback(msg);
+            } else {
+                defaultReceiveCallback(msg);
+            }
         }
         rxHandler.rxQueue.clear();
     }
@@ -323,4 +327,10 @@ void A429Communicator::sendChannelConfiguration(int channelIndex, bool isTx, std
         std::cout << "Sending RX Channel " << channelIndex << " configuration..." << std::endl;
         sendToHardware(rxMsg);
     }
+}
+
+void A429Communicator::defaultReceiveCallback(const A429Message& msg) {
+    std::cout << "[Communicator] Received Message - Type: " << (int)msg.type << " Counter: " << msg.counter << std::endl;
+    // Example: Pass data to Simulator variables
+    // Simulator::instance().setArincData(msg.label, msg.data);
 }

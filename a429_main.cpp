@@ -10,13 +10,6 @@ void hardwareIOCallback(const A429Message& msg) {
     std::cout << "[Main] Sent Message - Type: " << (int)msg.type << " Counter: " << msg.counter << std::endl;
 }
 
-void appReceiveCallback(const A429Message& msg) {
-    std::cout << "[Main] Received Message - Type: " << (int)msg.type << " Counter: " << msg.counter << std::endl;
-    
-    // Example: Pass data to Simulator variables
-    // Simulator::instance().setArincData(msg.label, msg.data);
-}
-
 void reportingCallback() {
     std::cout << "[Main] Reporting Status to OMD..." << std::endl;
 }
@@ -27,7 +20,7 @@ int main() {
 
     A429Communicator comm(
         hardwareIOCallback,                                                   // Send Callback (Logging only)
-        appReceiveCallback,                                                   // Receive Callback (NEW)
+        nullptr,                                                              // Receive Callback (Use default)
         reportingCallback,                                                    // Report Callback
         &udpDriver                                                            // Driver Pointer
     );
