@@ -5,34 +5,38 @@
 #include "a429_communicator.h"
 #include "a429_udp.h"
 
+void hardwareIOCallback(const A429Message& msg, A429UdpDriver* udpDriver) {
+    if (udpDriver) {
+        udpDriver->send(msg);
+        std::cout << "[Main] Sent Message - Type: " << (int)msg.type << " Counter: " << msg.counter << std::endl;
+    }
+}
+
+void appReceiveCallback(const A429Message& msg) {
+    std::cout << "[Main] Received Message - Type: " << (int)msg.type << " Counter: " << msg.counter << std::endl;
+}
+
+void reportingCallback() {
+    std::cout << "[Main] Reporting Status to OMD..." << std::endl;
+}
+
 int main() {
-    // UDP Driver Setup (Local Port: 8080, Target: 192.168.1.55:8080)
+    // UDP Driver Setup (Local Port: 8081, Target: 127.0.0.1:8080)
     A429UdpDriver udpDriver(8081, "127.0.0.1", 8080);
 
-    // Initialize API with callbacks for hardware IO and Reporting
     A429Communicator comm(
-        [&udpDriver](const A429Message& msg) {
-            udpDriver.send(msg);
-            std::cout << "Sending Message Type: " << (int)msg.type << " Counter: " << msg.counter << std::endl;
-        },
-        []() {
-            std::cout << "Reporting Status to OMD..." << std::endl;
-        }
+        [&](const A429Message& msg) { hardwareIOCallback(msg, &udpDriver); }, // Send Callback
+        appReceiveCallback,                                                   // Receive Callback (NEW)
+        reportingCallback,                                                    // Report Callback
+        &udpDriver                                                            // Driver Pointer
     );
 
     std::cout << "A429 Communicator Started" << std::endl;
-    
-    while (true) {
-        // Check for incoming data
-        A429Message rxMsg;
-        std::string senderIp;
-        
-        if (udpDriver.receive(rxMsg, senderIp)) {
-            comm.onPacketReceived(rxMsg, std::chrono::steady_clock::now());
-            std::cout << "Received packet from " << senderIp << std::endl;
-        }
 
-        comm.update();
+    while (true) {
+        // Pass time externally: simulator program can call at any frequency
+        auto now = std::chrono::steady_clock::now();
+        comm.update(now);
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 

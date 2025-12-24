@@ -1,7 +1,71 @@
 #include "a429_communicator.h"
+#include <vector>
+#include <iostream>
 
-A429Communicator::A429Communicator(SendCallback sendCb, ReportCallback reportCb) 
-    : currentState(CommState::STARTUP), sendCallback(sendCb), reportCallback(reportCb) {
+// TX Handler: manages outgoing messages
+class A429TxHandler {
+public:
+    void handleTx(const A429Message& msg) {
+        // You can process, log, or queue TX messages here
+        std::cout << "[TX Handler] TX Message: Type=" << (int)msg.type << " Counter=" << msg.counter << std::endl;
+    }
+};
+
+// RX Handler: manages incoming messages
+class A429RxHandler {
+public:
+    void handleRx(const A429Message& msg) {
+        // You can process, log, or handle RX messages here
+        std::cout << "[RX Handler] RX Message: Type=" << (int)msg.type << " Counter=" << msg.counter << std::endl;
+    }
+};
+
+// Handler objects inside Communicator
+static A429TxHandler txHandler;
+static A429RxHandler rxHandler;
+
+// Enable or disable TX channel
+void A429Communicator::enableTxChannel(int channelIndex, bool enable) {
+    if (channelIndex < 0 || channelIndex >= MAX_TX_CHANNELS) return;
+    txChannels[channelIndex].configured = enable;
+    if (enable) {
+        txChannels[channelIndex].state = ChannelState::OPERATIONAL;
+    } else {
+        txChannels[channelIndex].state = ChannelState::IDLE;
+    }
+}
+// Send message from one or more TX channels
+void A429Communicator::sendMessage(const A429Message& msg, const std::vector<int>& channelIndices) {
+    std::vector<int> targets = channelIndices;
+    if (targets.empty()) {
+        // If no channel is selected, send to all active channels
+        for (int i = 0; i < MAX_TX_CHANNELS; ++i) {
+            if (txChannels[i].configured && txChannels[i].state == ChannelState::OPERATIONAL) {
+                targets.push_back(i);
+            }
+        }
+    }
+    for (int channelIndex : targets) {
+        if (channelIndex < 0 || channelIndex >= MAX_TX_CHANNELS) continue;
+        if (!txChannels[channelIndex].configured || txChannels[channelIndex].state != ChannelState::OPERATIONAL) {
+            std::cerr << "TX Channel " << channelIndex << " is not active. Message not sent." << std::endl;
+            continue;
+        }
+        // TX message is passed to handler
+        txHandler.handleTx(msg);
+        // Send via UDP
+        if (udpDriver) {
+            udpDriver->send(msg);
+        }
+        // Can be reported via callback
+        if (sendCallback) {
+            sendCallback(msg);
+        }
+    }
+}
+
+A429Communicator::A429Communicator(SendCallback sendCb, ReceiveCallback receiveCb, ReportCallback reportCb, A429UdpDriver* udpDrv)
+    : currentState(CommState::STARTUP), sendCallback(sendCb), receiveCallback(receiveCb), reportCallback(reportCb), udpDriver(udpDrv) {
     resetConfigurationStatus();
 }
 
@@ -17,6 +81,16 @@ void A429Communicator::resetConfigurationStatus() {
 }
 
 void A429Communicator::update(std::chrono::steady_clock::time_point now) {
+    // Receive data from UDP
+    if (udpDriver) {
+        A429Message rxMsg;
+        std::string senderIp;
+        while (udpDriver->receive(rxMsg, senderIp)) {
+            rxBuffer.push_back(rxMsg);
+            std::cout << "Received packet from " << senderIp << std::endl;
+        }
+    }
+
     // Process all buffered incoming messages
     while (!rxBuffer.empty()) {
         processPacket(rxBuffer.front(), now);
@@ -84,6 +158,14 @@ void A429Communicator::processPacket(const A429Message& msg, std::chrono::steady
     }
     else if (currentState == CommState::OPERATIONAL) {
         // Handle standard RX/TX data
+        if (msg.type == MsgType::TX) {
+            txHandler.handleTx(msg);
+        } else if (msg.type == MsgType::RX) {
+            rxHandler.handleRx(msg);
+            if (receiveCallback) {
+                receiveCallback(msg);
+            }
+        }
     }
 }
 

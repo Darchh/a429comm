@@ -13,8 +13,8 @@ constexpr uint32_t DEFAULT_UNUSED_FIELD = 0xFFFFFFFF;
 // Message Types (Section 3)
 enum class MsgType : uint32_t {
     NONE            = 0,
-    TX              = 1, // Transfer message (to HW)
-    RX              = 2, // Receive message (from HW)
+    TX              = 1, // Transfer message (to hardware)
+    RX              = 2, // Receive message (from hardware)
     TX_STS          = 3, // TX channel status
     RX_STS          = 4, // RX channel status
     TX_CFG          = 5, // TX channel configuration
@@ -34,7 +34,7 @@ struct A429Message {
     MsgType  type;           // 8-11
     uint32_t data[DATA_FIELD_COUNT]; // 12-51
 
-    // Constructor to initialize defaults
+    // Constructor to initialize default values
     A429Message() : messageId(0), counter(0), type(MsgType::NONE) {
         for (int i = 0; i < DATA_FIELD_COUNT; ++i) {
             data[i] = DEFAULT_UNUSED_FIELD;
