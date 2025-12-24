@@ -47,14 +47,6 @@ void A429Communicator::sendMessage(const A429Message& msg, const std::vector<int
         }
         // TX message is passed to handler
         txHandler.handleTx(msg);
-        // Send via UDP
-        if (udpDriver) {
-            udpDriver->send(msg);
-        }
-        // Can be reported via callback
-        if (sendCallback) {
-            sendCallback(msg);
-        }
     }
 }
 
@@ -90,6 +82,25 @@ void A429Communicator::update(std::chrono::steady_clock::time_point now) {
         processPacket(rxBuffer.front(), now);
         rxCounter++;
         rxBuffer.pop_front();
+    }
+
+    // Flush RX Queue to Application (Callback)
+    // Consume RX messages accumulated in the buffer
+    if (!rxHandler.rxQueue.empty()) {
+        for (const auto& msg : rxHandler.rxQueue) {
+            if (receiveCallback) receiveCallback(msg);
+        }
+        rxHandler.rxQueue.clear();
+    }
+
+    // Flush TX Queue to UDP
+    // Send buffered TX messages via UDP
+    if (udpDriver && !txHandler.txQueue.empty()) {
+        for (const auto& msg : txHandler.txQueue) {
+            udpDriver->send(msg);
+            if (sendCallback) sendCallback(msg);
+        }
+        txHandler.txQueue.clear();
     }
 
     // Update each channel's state
@@ -156,9 +167,6 @@ void A429Communicator::processPacket(const A429Message& msg, std::chrono::steady
             txHandler.handleTx(msg);
         } else if (msg.type == MsgType::RX) {
             rxHandler.handleRx(msg);
-            if (receiveCallback) {
-                receiveCallback(msg);
-            }
         }
     }
 }
@@ -226,13 +234,6 @@ void A429Communicator::sendToHardware(A429Message& msg) {
     
     // Pass to handler (buffer/log)
     txHandler.handleTx(msg);
-
-    // Send via UDP directly from here
-    if (udpDriver) {
-        udpDriver->send(msg);
-    }
-
-    if (sendCallback) sendCallback(msg);
 }
 
 void A429Communicator::updateChannelStates(std::chrono::steady_clock::time_point now) {

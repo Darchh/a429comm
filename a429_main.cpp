@@ -12,6 +12,9 @@ void hardwareIOCallback(const A429Message& msg) {
 
 void appReceiveCallback(const A429Message& msg) {
     std::cout << "[Main] Received Message - Type: " << (int)msg.type << " Counter: " << msg.counter << std::endl;
+    
+    // Example: Pass data to Simulator variables
+    // Simulator::instance().setArincData(msg.label, msg.data);
 }
 
 void reportingCallback() {
