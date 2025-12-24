@@ -132,10 +132,6 @@ void A429Communicator::update(std::chrono::steady_clock::time_point now) {
     }
 }
 
-void A429Communicator::onPacketReceived(const A429Message& msg, std::chrono::steady_clock::time_point) {
-    rxBuffer.push_back(msg);
-}
-
 void A429Communicator::processPacket(const A429Message& msg, std::chrono::steady_clock::time_point now) {
     if (msg.type == MsgType::TX_CFG_STATUS) {
         for (int i = 0; i < MAX_TX_CHANNELS; ++i) {
