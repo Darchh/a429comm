@@ -9,6 +9,8 @@
 #include "a429_export.h"
 #include "a429_protocol.h"
 
+class A429UdpDriver;
+
 enum class ChannelState {
     IDLE,           // Channel not yet configured
     CONFIGURING,    // Configuration sent, waiting for response
@@ -75,6 +77,8 @@ public:
 
     // Enable or disable TX channel
     void enableTxChannel(int channelIndex, bool enable);
+
+    CommState getCurrentState() const;
 
 private:
     void checkConfigurationComplete(std::chrono::steady_clock::time_point now);
